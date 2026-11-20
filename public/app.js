@@ -268,7 +268,7 @@ function renderChrome() {
     pill.innerHTML = `<span class="dot"></span><span>${esc(label)}</span>`;
   }
   $('#demo-banner').hidden = !S.demo;
-  $('#logout-btn').hidden = !S.session?.authRequired;
+  $('#whoami').textContent = S.session?.user ? `Signed in as ${S.session.user.username}` : '';
 }
 
 // ---------------------------------------------------------------- views
@@ -1385,7 +1385,9 @@ views.settings = {
 
         <div class="row-gap"><button class="btn btn-primary" type="submit" data-busy="Saving">${icon('check')}Save settings</button>
           <span class="hint">Data folder: <code>${esc(S.dataDir)}</code></span></div>
-      </form>`;
+      </form>
+      <div class="settings" style="margin-top:18px"><section class="card" id="accounts-card"><div class="center-state" style="min-height:120px"><span class="spinner"></span></div></section></div>`;
+    this.mountAccounts(el);
     const form = $('#settings-form', el);
     el.addEventListener('click', (e) => {
       const b = e.target.closest('[data-tz]');
@@ -1410,6 +1412,92 @@ views.settings = {
         toast(tzChanged ? 'Saved. Schedules now follow the new timezone.' : 'Settings saved.');
       });
     });
+  },
+
+  async mountAccounts(el) {
+    const card = $('#accounts-card', el);
+    card.addEventListener('submit', (e) => this.onAccountSubmit(e, el));
+    card.addEventListener('click', (e) => this.onAccountClick(e, el));
+    await this.renderAccounts(el);
+  },
+
+  async renderAccounts(el) {
+    const card = $('#accounts-card', el);
+    let users = [];
+    try {
+      users = (await api('GET', '/users')).users;
+    } catch (err) {
+      card.innerHTML = `<div class="alert alert-red">${icon('alert')}<span>${esc(err.message)}</span></div>`;
+      return;
+    }
+    const me = users.find((u) => u.isYou);
+    card.innerHTML = `
+      <h2>${icon('shield')}Accounts</h2>
+      <p class="muted">People who can log in to this dashboard. Every account has full access, including sending messages.</p>
+      <ul class="account-list">${users.map((u) => `<li>
+        <div class="avatar">${esc(u.username.charAt(0).toUpperCase())}</div>
+        <div class="who"><strong>${esc(u.username)}</strong><small>Added ${esc(fmtDate(u.createdAt, { weekday: undefined, hour: undefined, minute: undefined, year: 'numeric' }))}</small></div>
+        ${u.isYou ? '<span class="badge badge-green">You</span>' : ''}
+        ${u.managedByEnv ? '<span class="badge badge-outline" title="Password comes from ADMIN_PASSWORD on the server">Set on server</span>' : ''}
+        ${!u.isYou && !u.managedByEnv ? `<button class="btn btn-sm btn-ghost btn-icon" data-remove-user="${esc(u.id)}" data-name="${esc(u.username)}" title="Remove" aria-label="Remove ${esc(u.username)}">${icon('trash', 'i-sm')}</button>` : ''}
+      </li>`).join('')}</ul>
+
+      <form class="sub-form" id="add-user-form" autocomplete="off">
+        <h3>Add an account</h3>
+        <div class="two">
+          <label class="field"><span>Username</span><input type="text" name="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="32" required autocomplete="off"></label>
+          <label class="field"><span>Password</span><input type="password" name="password" minlength="8" required autocomplete="new-password"><span class="hint">At least 8 characters. Share it with them privately.</span></label>
+        </div>
+        <div><button class="btn" type="submit" data-busy="Adding">${icon('plus', 'i-sm')}Add account</button></div>
+      </form>
+
+      <form class="sub-form" id="password-form">
+        <h3>Change my password</h3>
+        ${me?.managedByEnv ? '<p class="muted">Your password comes from <code>ADMIN_PASSWORD</code> on the server. Change it there and restart the app.</p>' : `
+        <div class="two">
+          <label class="field"><span>Current password</span><input type="password" name="currentPassword" required autocomplete="current-password"></label>
+          <label class="field"><span>New password</span><input type="password" name="newPassword" minlength="8" required autocomplete="new-password"></label>
+        </div>
+        <div><button class="btn" type="submit" data-busy="Saving">${icon('check', 'i-sm')}Change password</button></div>`}
+      </form>
+
+      <div class="sub-form"><div class="setting-line"><span class="muted">Signed in as <b>${esc(me?.username || '')}</b></span>
+        <button class="btn btn-sm" data-act="logout">${icon('logout', 'i-sm')}Log out</button></div></div>`;
+  },
+
+  async onAccountSubmit(e, el) {
+    e.preventDefault();
+    const f = e.target;
+    const btn = f.querySelector('[type="submit"]');
+    if (f.id === 'add-user-form') {
+      await withBusy(btn, async () => {
+        const u = await api('POST', '/users', { username: f.username.value.trim(), password: f.password.value });
+        toast(`Account "${u.username}" added.`);
+        await this.renderAccounts(el);
+      });
+    } else if (f.id === 'password-form') {
+      await withBusy(btn, async () => {
+        await api('POST', '/account/password', { currentPassword: f.currentPassword.value, newPassword: f.newPassword.value });
+        f.reset();
+        toast('Password changed. Other devices using this account are now logged out.');
+      });
+    }
+  },
+
+  async onAccountClick(e, el) {
+    const rm = e.target.closest('[data-remove-user]');
+    if (rm) {
+      const ok = await confirmDialog({ title: `Remove ${rm.dataset.name}?`, body: 'They will no longer be able to log in. Schedules they made are kept.', confirm: 'Remove', danger: true });
+      if (!ok) return;
+      await withBusy(rm, async () => {
+        await api('DELETE', `/users/${rm.dataset.removeUser}`);
+        toast('Account removed.');
+        await this.renderAccounts(el);
+      });
+    } else if (e.target.closest('[data-act="logout"]')) {
+      await api('POST', '/logout').catch(() => {});
+      location.reload();
+    }
   },
 };
 
@@ -1498,30 +1586,55 @@ async function reloadAll() {
 setInterval(() => { if (current?.name === 'schedules' && !document.hidden) refresh('schedules'); }, 60000);
 
 // ---------------------------------------------------------------- boot
-function showLogin() {
-  events?.close();
-  $('#boot').hidden = true;
-  $('#app').hidden = true;
-  $('#login').hidden = false;
-  $('#login-form [name="password"]').focus();
+function showScreen(id) {
+  for (const screen of ['boot', 'login', 'setup', 'app']) $(`#${screen}`).hidden = screen !== id;
 }
 
-$('#login-form').addEventListener('submit', async (e) => {
+function showLogin() {
+  events?.close();
+  showScreen('login');
+  const form = $('#login-form');
+  (form.username.value ? form.password : form.username).focus();
+}
+
+function showSetup() {
+  showScreen('setup');
+  $('#setup-form [name="password"]').focus();
+}
+
+async function submitAuthForm(e, url, body, errorEl) {
   e.preventDefault();
-  const err = $('#login-error');
-  err.hidden = true;
-  const btn = e.target.querySelector('button');
+  errorEl.hidden = true;
+  const btn = e.target.querySelector('button[type="submit"]');
   btn.disabled = true;
   try {
-    await api('POST', '/login', { password: e.target.password.value });
-    e.target.reset();
+    const r = await api('POST', url, body);
+    S.session = { ...S.session, authenticated: true, needsSetup: false, user: r.user };
+    e.target.password.value = '';
     await startApp();
   } catch (ex) {
-    err.textContent = ex.message;
-    err.hidden = false;
+    errorEl.textContent = ex.message;
+    errorEl.hidden = false;
   } finally {
     btn.disabled = false;
   }
+}
+
+$('#login-form').addEventListener('submit', (e) => {
+  const f = e.target;
+  submitAuthForm(e, '/login', { username: f.username.value.trim(), password: f.password.value }, $('#login-error'));
+});
+
+$('#setup-form').addEventListener('submit', (e) => {
+  const f = e.target;
+  const err = $('#setup-error');
+  if (f.password.value !== f.password2.value) {
+    e.preventDefault();
+    err.textContent = 'The two passwords are not the same.';
+    err.hidden = false;
+    return;
+  }
+  submitAuthForm(e, '/setup', { username: f.username.value.trim(), password: f.password.value }, err).then(() => { f.password2.value = ''; });
 });
 
 $('#logout-btn').addEventListener('click', async () => {
@@ -1531,10 +1644,8 @@ $('#logout-btn').addEventListener('click', async () => {
 
 let started = false;
 async function startApp() {
-  $('#login').hidden = true;
   await reloadAll();
-  $('#boot').hidden = true;
-  $('#app').hidden = false;
+  showScreen('app');
   connectEvents();
   if (!started) {
     started = true;
@@ -1550,7 +1661,8 @@ async function startApp() {
   try {
     S.session = await (await fetch('/api/session')).json();
     S.demo = S.session.demo;
-    if (S.session.authRequired && !S.session.authenticated) showLogin();
+    if (S.session.needsSetup) showSetup();
+    else if (!S.session.authenticated) showLogin();
     else await startApp();
   } catch (err) {
     $('#boot').innerHTML = `<div class="card card-pad" style="max-width:420px;text-align:center"><h2>Can't reach the app</h2><p class="muted" style="margin-top:6px">${esc(err.message)}. Is the server running?</p></div>`;

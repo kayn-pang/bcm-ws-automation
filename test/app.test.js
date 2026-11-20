@@ -9,9 +9,11 @@ import { createApp } from '../src/app.js';
 process.env.MOCK_LINK_MS = '50';
 const logger = pino({ level: 'silent' });
 
-async function boot(extra = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-app-'));
-  const config = { driver: 'mock', isDemo: true, adminPassword: '', dataDir: dir, mockFailRate: 0, tickMs: 60000, retryBaseMs: 20, ...extra };
+async function boot(extra = {}, { login = true, dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-app-')) } = {}) {
+  const config = {
+    driver: 'mock', isDemo: true, host: '127.0.0.1', adminUsername: 'admin', adminPassword: 'test-password-1',
+    dataDir: dir, mockFailRate: 0, tickMs: 60000, retryBaseMs: 20, ...extra,
+  };
   const paths = { db: path.join(dir, 'db.json'), auth: path.join(dir, 'auth'), uploads: path.join(dir, 'uploads'), secret: path.join(dir, 'secret.key') };
   fs.mkdirSync(paths.uploads, { recursive: true });
   const ctx = await createApp({ config, paths, logger });
@@ -19,15 +21,22 @@ async function boot(extra = {}) {
   await ctx.start();
   const server = await new Promise((resolve) => { const s = ctx.app.listen(0, '127.0.0.1', () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}/api`;
+  const jar = { cookie: '' };
   const call = async (method, url, body, headers = {}) => {
     const res = await fetch(base + url, {
       method,
-      headers: { 'Content-Type': 'application/json', 'X-App': '1', ...headers },
+      headers: { 'Content-Type': 'application/json', 'X-App': '1', ...(jar.cookie ? { Cookie: jar.cookie } : {}), ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+    const setCookie = res.headers.get('set-cookie');
+    if (setCookie) jar.cookie = setCookie.split(';')[0];
     return { status: res.status, body: await res.json().catch(() => null), headers: res.headers };
   };
-  return { ...ctx, server, call, close: async () => { server.close(); await ctx.stop(); } };
+  if (login && config.adminPassword) {
+    const r = await call('POST', '/login', { username: config.adminUsername, password: config.adminPassword });
+    assert.equal(r.status, 200, 'test login failed');
+  }
+  return { ...ctx, server, call, jar, dir, close: async () => { server.close(); await ctx.stop(); } };
 }
 
 async function until(fn, ms = 4000) {
@@ -138,19 +147,100 @@ test('state-changing requests need the X-App header', async () => {
   assert.equal(r.status, 403);
 });
 
-test('password protection', async () => {
-  const secured = await boot({ adminPassword: 'correct horse' });
+test('login with username and password', async () => {
+  const secured = await boot({ adminUsername: 'boss', adminPassword: 'correct horse' }, { login: false });
   try {
     assert.equal((await secured.call('GET', '/state')).status, 401);
     const session = (await secured.call('GET', '/session')).body;
-    assert.deepEqual(session, { authRequired: true, authenticated: false, demo: true });
-    assert.equal((await secured.call('POST', '/login', { password: 'nope' })).status, 401);
-    const ok = await secured.call('POST', '/login', { password: 'correct horse' });
+    assert.deepEqual(session, { needsSetup: false, authenticated: false, user: null, demo: true });
+    assert.equal((await secured.call('POST', '/login', { username: 'boss', password: 'nope' })).status, 401);
+    assert.equal((await secured.call('POST', '/login', { username: 'someone', password: 'correct horse' })).status, 401);
+    const ok = await secured.call('POST', '/login', { username: 'BOSS', password: 'correct horse' });
     assert.equal(ok.status, 200);
-    const cookie = ok.headers.get('set-cookie').split(';')[0];
-    assert.equal((await secured.call('GET', '/state', undefined, { Cookie: cookie })).status, 200);
-    assert.equal((await secured.call('GET', '/state', undefined, { Cookie: 'cs_session=forged.token' })).status, 401);
+    assert.equal((await secured.call('GET', '/state')).status, 200);
+    assert.equal((await secured.call('GET', '/state', undefined, { Cookie: 'cs_session=u_x.abc.forged' })).status, 401);
+    // passwords are stored hashed, never as plain text
+    secured.store.flush();
+    const saved = fs.readFileSync(path.join(secured.dir, 'db.json'), 'utf8');
+    assert.match(saved, /scrypt\$/);
+    assert.ok(!saved.includes('correct horse'));
   } finally {
     await secured.close();
+  }
+});
+
+test('first run on your own computer: create the admin account in the browser', async () => {
+  const fresh = await boot({ adminPassword: '' }, { login: false });
+  try {
+    assert.equal((await fresh.call('GET', '/session')).body.needsSetup, true);
+    assert.equal((await fresh.call('GET', '/state')).status, 401);
+    assert.equal((await fresh.call('POST', '/setup', { username: 'ab', password: 'longenough' })).status, 400);
+    assert.equal((await fresh.call('POST', '/setup', { username: 'owner', password: 'short' })).status, 400);
+    const created = await fresh.call('POST', '/setup', { username: 'owner', password: 'longenough' });
+    assert.equal(created.status, 200);
+    assert.equal((await fresh.call('GET', '/state')).status, 200); // logged in straight away
+    const again = await fresh.call('POST', '/setup', { username: 'hacker', password: 'longenough' });
+    assert.equal(again.status, 403);
+  } finally {
+    await fresh.close();
+  }
+});
+
+test('the first account cannot be claimed over the network', async () => {
+  const exposed = await boot({ adminPassword: '', host: '0.0.0.0' }, { login: false });
+  try {
+    assert.equal((await exposed.call('POST', '/setup', { username: 'owner', password: 'longenough' })).status, 403);
+  } finally {
+    await exposed.close();
+  }
+});
+
+test('add a team account, change passwords, remove the account', async () => {
+  const added = await app.call('POST', '/users', { username: 'helper', password: 'helper-pass-1' });
+  assert.equal(added.status, 201);
+  assert.equal((await app.call('POST', '/users', { username: 'HELPER', password: 'another-pass' })).status, 400);
+
+  const users = (await app.call('GET', '/users')).body.users;
+  const admin = users.find((u) => u.username === 'admin');
+  assert.equal(admin.isYou, true);
+  assert.equal(admin.managedByEnv, true);
+  assert.ok(users.every((u) => !('passwordHash' in u)));
+
+  // the server-managed admin can't change its password in the dashboard, or be removed
+  assert.equal((await app.call('POST', '/account/password', { currentPassword: 'test-password-1', newPassword: 'whatever-123' })).status, 400);
+  assert.equal((await app.call('DELETE', `/users/${admin.id}`)).status, 400);
+
+  // the helper logs in and changes their own password
+  const helperApp = { jar: { cookie: '' } };
+  const asHelper = async (method, url, body) => {
+    const res = await fetch(`http://127.0.0.1:${app.server.address().port}/api${url}`, {
+      method, headers: { 'Content-Type': 'application/json', 'X-App': '1', Cookie: helperApp.jar.cookie }, body: body && JSON.stringify(body),
+    });
+    const sc = res.headers.get('set-cookie');
+    if (sc) helperApp.jar.cookie = sc.split(';')[0];
+    return { status: res.status, body: await res.json().catch(() => null) };
+  };
+  assert.equal((await asHelper('POST', '/login', { username: 'helper', password: 'helper-pass-1' })).status, 200);
+  const oldCookie = helperApp.jar.cookie;
+  assert.equal((await asHelper('POST', '/account/password', { currentPassword: 'wrong', newPassword: 'helper-pass-2' })).status, 400);
+  assert.equal((await asHelper('POST', '/account/password', { currentPassword: 'helper-pass-1', newPassword: 'helper-pass-2' })).status, 200);
+  assert.equal((await asHelper('GET', '/state')).status, 200); // new session issued
+  assert.equal((await app.call('GET', '/state', undefined, { Cookie: oldCookie })).status, 401); // old session is dead
+
+  assert.equal((await app.call('DELETE', `/users/${added.body.id}`)).status, 200);
+  assert.equal((await asHelper('GET', '/state')).status, 401);
+});
+
+test('forgot password: setting ADMIN_PASSWORD and restarting gets you back in', async () => {
+  const first = await boot({ adminPassword: '' }, { login: false });
+  await first.call('POST', '/setup', { username: 'owner', password: 'forgotten-pass' });
+  await first.close();
+  const restarted = await boot({ adminUsername: 'owner', adminPassword: 'brand-new-pass' }, { login: false, dir: first.dir });
+  try {
+    assert.equal((await restarted.call('POST', '/login', { username: 'owner', password: 'forgotten-pass' })).status, 401);
+    assert.equal((await restarted.call('POST', '/login', { username: 'owner', password: 'brand-new-pass' })).status, 200);
+    assert.equal((await restarted.call('GET', '/users')).body.users.length, 1);
+  } finally {
+    await restarted.close();
   }
 });

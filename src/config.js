@@ -32,6 +32,7 @@ const defaultDataDir = path.join(ROOT_DIR, isDemo ? 'data-demo' : 'data');
 export const config = {
   port: Number(process.env.PORT) || 3000,
   host: process.env.HOST || '127.0.0.1',
+  adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminPassword: process.env.ADMIN_PASSWORD || '',
   dataDir: path.resolve(process.env.DATA_DIR || defaultDataDir),
   driver: isDemo ? 'mock' : 'baileys',

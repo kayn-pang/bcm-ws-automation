@@ -12,7 +12,7 @@ Set a message once, pick your WhatsApp communities, choose when it goes out, and
 | **Communities** | See every community (its Announcements group and sub-groups) and every group your number is in, plus where you're allowed to post. Tick some and create a schedule for them. |
 | **Schedules** | Write the message (text, and optionally an image, video or file), pick the communities, pick when: one time, daily, weekly, monthly, "only when I click Send now", or a custom cron. Pause, edit, duplicate or send now at any time. |
 | **Inbox** | Every message to every community, with its status: *Queued, Sending, Sent, Delivered, Read, Failed, Missed, Cancelled*. Filter by status, schedule or community. Resend one, a selection, or all failed ones at once. |
-| **Settings** | Timezone, the pause between messages, retries, and how late a missed message may still go out. |
+| **Settings** | Timezone, the pause between messages, retries, how late a missed message may still go out, and **Accounts**: who can log in. |
 
 <p>
 <img src="docs/editor.png" width="49%" alt="Schedule editor">
@@ -40,7 +40,7 @@ npm install
 npm start
 ```
 
-Open **http://localhost:3000**, go to **Connect**, and link your number:
+Open **http://localhost:3000**. The first time, it asks you to **create your admin account** (username and password). Then go to **Connect** and link your number:
 
 - **QR code:** on your phone, open WhatsApp → *Settings* (iPhone) or *⋮ menu* (Android) → *Linked devices* → *Link a device*, and scan the code on screen.
 - **Phone number:** type your number with country code (digits only, e.g. `60123456789`). The app shows an 8-character code. On the phone: *Linked devices* → *Link a device* → *Link with phone number instead*, then type the code.
@@ -66,6 +66,7 @@ Schedules only go out while the app is running. If it's on your laptop and the l
 1. Put this project in your own GitHub repository.
 2. On Railway: **New Project → Deploy from GitHub repo**, pick the repository. Railway finds the `Dockerfile` and builds it.
 3. Open the service → **Variables** and add:
+   - `ADMIN_USERNAME`: the admin's login name, e.g. `admin`.
    - `ADMIN_PASSWORD`: a strong password. The dashboard will be on the internet.
    - `TZ`: your timezone, e.g. `Asia/Kuala_Lumpur`.
    - `RAILWAY_RUN_UID` = `0`, so the app may write to the volume.
@@ -82,7 +83,7 @@ Any small Linux server works (DigitalOcean, Hetzner, Vultr, Lightsail and simila
 git clone <your repository>
 cd <your repository>      # the folder with package.json and Dockerfile
 cp .env.example .env
-nano .env                 # set ADMIN_PASSWORD (required on a server) and TZ
+nano .env                 # set ADMIN_USERNAME, ADMIN_PASSWORD (required on a server) and TZ
 docker compose up -d --build
 ```
 
@@ -97,7 +98,7 @@ Open `http://<server-ip>:3000`, log in with your password, and link your number.
 
 ```bash
 npm install
-cp .env.example .env      # set ADMIN_PASSWORD and HOST=0.0.0.0 if other devices need access
+cp .env.example .env      # set ADMIN_USERNAME, ADMIN_PASSWORD, and HOST=0.0.0.0 if other devices need access
 npm install -g pm2
 pm2 start npm --name community-scheduler -- start
 pm2 save && pm2 startup   # start again automatically after a reboot
@@ -115,7 +116,19 @@ pm2 save && pm2 startup   # start again automatically after a reboot
 | Automatic retries | 2 | A failed send is retried 30 s and 60 s later before it's marked **Failed**. |
 | Keep history | 90 days | Older inbox rows (and attachments nothing uses any more) are cleaned up. |
 
-`.env` options: `ADMIN_PASSWORD`, `PORT` (3000), `HOST` (127.0.0.1), `TZ`, `DATA_DIR`, `LOG_LEVEL`. See [.env.example](.env.example).
+`.env` options: `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `PORT` (3000), `HOST` (127.0.0.1), `TZ`, `DATA_DIR`, `LOG_LEVEL`. See [.env.example](.env.example).
+
+## Accounts and login
+
+Everyone needs a username and password to open the dashboard, and every account has full access.
+
+- **First admin, on your own computer:** the first time you open the dashboard it asks you to create one.
+- **First admin, on a server** (Railway, a VPS, or `HOST=0.0.0.0`): set `ADMIN_USERNAME` and `ADMIN_PASSWORD`. The app refuses to start on a reachable address without them, so a stranger can't claim the first account.
+- **More people:** *Settings → Accounts → Add an account*. Remove them there too.
+- **Change your password:** *Settings → Accounts → Change my password*. Your other devices are logged out.
+- **Forgot your password:** set `ADMIN_USERNAME` to your username and `ADMIN_PASSWORD` to a new password, then restart. That account then always uses `ADMIN_PASSWORD`, and its password can only be changed there.
+
+Passwords are stored as salted scrypt hashes, never as plain text. Logins last 30 days. After 10 wrong attempts from one address, logging in is blocked for 15 minutes.
 
 ## Message status, explained
 
@@ -141,7 +154,19 @@ This app uses WhatsApp's linked-device protocol through an unofficial library. T
 - Open WhatsApp on the phone at least every 14 days, or the linked device is logged out.
 - If you see **Logged out** on the Connect tab, the device was unlinked from the phone. Link it again; your schedules are kept.
 
-**Your data:** everything is stored in the `data/` folder (`DATA_DIR`): `whatsapp-auth/` is your WhatsApp login (treat it like a password, never share or commit it), `db.json` holds schedules, settings and history, `uploads/` holds attachments. Back up the folder to keep your schedules. The app only talks to WhatsApp, plus GitHub (to check the current WhatsApp Web version) and any website you link to in a message (to build the link preview).
+## Keep these private (never upload them)
+
+| File or folder | What it is | Why it's secret |
+| --- | --- | --- |
+| `data/whatsapp-auth/` | Your WhatsApp login | Anyone with it can read and send messages as your number. |
+| `data/db.json` | Accounts (password hashes), schedules, history | Contains your team's logins and your message history. |
+| `data/secret.key` | Signs login sessions | With it, someone could forge a login. |
+| `data/uploads/` | Files attached to messages | Your content. |
+| `.env` | Your passwords and settings | Contains `ADMIN_PASSWORD`. |
+
+The [.gitignore](.gitignore) already keeps all of these out of Git, and the [.dockerignore](.dockerignore) keeps them out of Docker images, so `git add .` and `git push` are safe. Don't remove those lines. On Railway, put passwords in **Variables**, never in a file in the repository. If you ever do upload one of these by mistake: unlink the device in WhatsApp (*Linked devices*), change the passwords, and delete the `data` folder to start fresh.
+
+**Your data:** everything is stored in the `data/` folder (`DATA_DIR`). Back up the folder to keep your schedules. The app only talks to WhatsApp, plus GitHub (to check the current WhatsApp Web version) and any website you link to in a message (to build the link preview).
 
 ## Troubleshooting
 

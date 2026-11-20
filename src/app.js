@@ -4,8 +4,9 @@ import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import express from 'express';
 import multer from 'multer';
-import { ROOT_DIR } from './config.js';
+import { ROOT_DIR, isLocalHost } from './config.js';
 import { Store, newId } from './store.js';
+import { Accounts, AccountError, SESSION_DAYS } from './auth.js';
 import { Sender } from './sender.js';
 import { Scheduler } from './scheduler.js';
 import { computeNextRun, computeNextRuns, describeSchedule, normalizeSchedule, validateSchedule } from './schedule.js';
@@ -13,7 +14,6 @@ import { BaileysDriver } from './whatsapp/baileys.js';
 import { MockDriver } from './whatsapp/mock.js';
 
 const SESSION_COOKIE = 'cs_session';
-const SESSION_DAYS = 30;
 const MAX_UPLOAD_MB = 64;
 const STATUSES = ['queued', 'sending', 'sent', 'delivered', 'read', 'failed', 'missed', 'cancelled'];
 
@@ -86,26 +86,33 @@ export async function createApp({ config, paths, logger }) {
     return live.length ? live : store.data.chatsCache || [];
   };
 
-  // ---------- auth ----------
-  const secret = loadSecret(paths.secret);
-  const authRequired = !!config.adminPassword;
-  const pwTag = crypto.createHash('sha256').update(config.adminPassword).digest('hex').slice(0, 16);
-  const sign = (ts) => crypto.createHmac('sha256', secret).update(`${ts}.${pwTag}`).digest('hex');
-  const makeToken = () => {
-    const ts = Date.now().toString(36);
-    return `${ts}.${sign(ts)}`;
+  // ---------- accounts & login ----------
+  const accounts = new Accounts({
+    store,
+    secret: loadSecret(paths.secret),
+    envAdmin: { username: config.adminUsername, password: config.adminPassword },
+  });
+  const currentUser = (req) => accounts.userFromToken(parseCookies(req.headers.cookie)[SESSION_COOKIE]);
+  const setSession = (req, res, user) => {
+    const secure = req.secure ? '; Secure' : '';
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${accounts.makeToken(user)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86400}${secure}`);
   };
-  const tokenValid = (token) => {
-    const [ts, sig] = String(token || '').split('.');
-    if (!ts || !sig) return false;
-    if (Date.now() - parseInt(ts, 36) > SESSION_DAYS * 86400000) return false;
-    const expected = Buffer.from(sign(ts));
-    const given = Buffer.from(sig);
-    return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+  const accountError = (fn) => {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof AccountError) throw bad(err.message);
+      throw err;
+    }
   };
-  const isAuthed = (req) => !authRequired || tokenValid(parseCookies(req.headers.cookie)[SESSION_COOKIE]);
 
   const loginAttempts = new Map();
+  const throttle = (req) => {
+    const now = Date.now();
+    const recent = (loginAttempts.get(req.ip) || []).filter((t) => now - t < 15 * 60000);
+    if (recent.length >= 10) throw new HttpError(429, 'Too many attempts. Wait 15 minutes and try again.');
+    return () => loginAttempts.set(req.ip, [...recent, now]);
+  };
 
   // ---------- express ----------
   const app = express();
@@ -122,28 +129,46 @@ export async function createApp({ config, paths, logger }) {
 
   const api = express.Router();
 
+  // State-changing requests must carry the X-App header, which a form on another
+  // website can't add (simple protection against cross-site request forgery).
+  api.use((req, res, next) => {
+    if (req.method !== 'GET' && req.headers['x-app'] !== '1') return next(new HttpError(403, 'Missing X-App header.'));
+    next();
+  });
+
   api.get('/health', (req, res) => res.json({ ok: true }));
 
   api.get('/session', (req, res) => {
-    res.json({ authRequired, authenticated: isAuthed(req), demo: config.isDemo });
+    const user = currentUser(req);
+    res.json({
+      needsSetup: accounts.needsSetup,
+      authenticated: !!user,
+      user: user ? { username: user.username } : null,
+      demo: config.isDemo,
+    });
+  });
+
+  // First run on your own computer: create the first admin account in the browser.
+  // (On a server the first admin comes from ADMIN_USERNAME / ADMIN_PASSWORD instead.)
+  api.post('/setup', (req, res) => {
+    if (!accounts.needsSetup) throw new HttpError(403, 'An admin account already exists. Please log in.');
+    if (!isLocalHost(config.host)) throw new HttpError(403, 'Set ADMIN_USERNAME and ADMIN_PASSWORD on the server to create the first account.');
+    const user = accountError(() => accounts.create(req.body?.username, req.body?.password));
+    logger.info({ username: user.username }, 'admin account created');
+    setSession(req, res, user);
+    res.json({ ok: true, user: { username: user.username } });
   });
 
   api.post('/login', (req, res) => {
-    const ip = req.ip;
-    const now = Date.now();
-    const recent = (loginAttempts.get(ip) || []).filter((t) => now - t < 15 * 60000);
-    if (recent.length >= 10) throw new HttpError(429, 'Too many attempts. Wait 15 minutes and try again.');
-    const given = Buffer.from(String(req.body?.password || ''));
-    const real = Buffer.from(config.adminPassword);
-    const ok = authRequired && given.length === real.length && crypto.timingSafeEqual(given, real);
-    if (!ok) {
-      loginAttempts.set(ip, [...recent, now]);
-      throw new HttpError(401, 'Wrong password.');
+    const fail = throttle(req);
+    const user = accounts.authenticate(req.body?.username, req.body?.password);
+    if (!user) {
+      fail();
+      throw new HttpError(401, 'Wrong username or password.');
     }
-    loginAttempts.delete(ip);
-    const secure = req.secure ? '; Secure' : '';
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${makeToken()}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86400}${secure}`);
-    res.json({ ok: true });
+    loginAttempts.delete(req.ip);
+    setSession(req, res, user);
+    res.json({ ok: true, user: { username: user.username } });
   });
 
   api.post('/logout', (req, res) => {
@@ -151,12 +176,41 @@ export async function createApp({ config, paths, logger }) {
     res.json({ ok: true });
   });
 
-  // Everything below needs a login. State-changing requests must also carry the
-  // X-App header, which a cross-site form can't add (simple CSRF protection).
+  // Everything below needs a login.
   api.use((req, res, next) => {
-    if (!isAuthed(req)) return next(new HttpError(401, 'Please log in.'));
-    if (req.method !== 'GET' && req.headers['x-app'] !== '1') return next(new HttpError(403, 'Missing X-App header.'));
+    req.user = currentUser(req);
+    if (!req.user) return next(new HttpError(401, 'Please log in.'));
     next();
+  });
+
+  api.get('/users', (req, res) => {
+    res.json({ users: accounts.users.map((u) => accounts.publicUser(u, req.user)) });
+  });
+
+  api.post('/users', (req, res) => {
+    const user = accountError(() => accounts.create(req.body?.username, req.body?.password));
+    logger.info({ username: user.username, by: req.user.username }, 'account added');
+    res.status(201).json(accounts.publicUser(user, req.user));
+  });
+
+  api.delete('/users/:id', (req, res) => {
+    if (req.params.id === req.user.id) throw bad("You can't remove your own account while logged in with it.");
+    const target = accounts.find(req.params.id);
+    accountError(() => accounts.remove(req.params.id));
+    logger.info({ username: target?.username, by: req.user.username }, 'account removed');
+    res.json({ ok: true });
+  });
+
+  api.post('/account/password', (req, res) => {
+    const fail = throttle(req);
+    try {
+      accountError(() => accounts.changePassword(req.user, req.body?.currentPassword, req.body?.newPassword));
+    } catch (err) {
+      fail();
+      throw err;
+    }
+    setSession(req, res, req.user); // the old session ended with the old password
+    res.json({ ok: true });
   });
 
   // ---------- live updates (Server-Sent Events) ----------
@@ -477,5 +531,5 @@ export async function createApp({ config, paths, logger }) {
     store.flush();
   }
 
-  return { app, start, stop, store, wa, sender, scheduler, bus };
+  return { app, start, stop, store, wa, sender, scheduler, bus, accounts };
 }

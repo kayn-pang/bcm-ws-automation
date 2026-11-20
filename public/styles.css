@@ -531,3 +531,16 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .section-title:first-child { margin-top: 0; }
 .link-btn { border: 0; background: none; padding: 0; color: var(--accent-text); font-weight: 650; cursor: pointer; font-size: inherit; }
 .link-btn:hover { text-decoration: underline; }
+
+/* ---------- accounts ---------- */
+.whoami { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 0 10px; font-size: 13px; color: var(--muted); min-width: 0; }
+.whoami span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-list { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.account-list li { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--border); }
+.account-list li:first-child { border-top: 0; }
+.account-list .avatar { width: 34px; height: 34px; font-size: 14px; }
+.account-list .who { flex: 1; min-width: 0; }
+.account-list .who strong { display: block; overflow: hidden; text-overflow: ellipsis; }
+.account-list .who small { color: var(--muted); font-size: 12.5px; }
+.sub-form { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+.sub-form h3 { font-size: 15px; }

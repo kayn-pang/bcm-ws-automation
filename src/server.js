@@ -5,14 +5,6 @@ import { createApp } from './app.js';
 
 const logger = createLogger(config.logLevel);
 
-if (!config.adminPassword && !isLocalHost(config.host)) {
-  logger.fatal(
-    `HOST is set to ${config.host}, which makes the dashboard reachable from other machines, but ADMIN_PASSWORD is empty. `
-    + 'Set ADMIN_PASSWORD in your .env file so nobody else can control your WhatsApp.',
-  );
-  process.exit(1);
-}
-
 try {
   ensureDirs();
   fs.accessSync(config.dataDir, fs.constants.W_OK);
@@ -23,13 +15,30 @@ try {
   );
   process.exit(1);
 }
-const { app, start, stop } = await createApp({ config, paths, logger });
+let created;
+try {
+  created = await createApp({ config, paths, logger });
+} catch (err) {
+  logger.fatal(err.message);
+  process.exit(1);
+}
+const { app, start, stop, accounts } = created;
+
+// Reachable from other machines but nobody can log in yet: anyone could claim the
+// first account, so require ADMIN_USERNAME / ADMIN_PASSWORD instead.
+if (accounts.needsSetup && !isLocalHost(config.host)) {
+  logger.fatal(
+    `HOST is ${config.host}, so the dashboard can be reached from other machines, but there is no admin account yet. `
+    + 'Set ADMIN_USERNAME and ADMIN_PASSWORD (in .env, or in your host\'s variables) and start again.',
+  );
+  process.exit(1);
+}
 
 const server = app.listen(config.port, config.host, async () => {
   const shownHost = isLocalHost(config.host) ? 'localhost' : config.host;
   logger.info(`Dashboard running at http://${shownHost}:${config.port}`);
   if (config.isDemo) logger.warn('DEMO MODE: no real WhatsApp is used. Messages are only pretend-sent.');
-  if (!config.adminPassword) logger.warn('No ADMIN_PASSWORD set. That is fine on your own computer; set one before putting this on a server.');
+  if (accounts.needsSetup) logger.info(`First run: open http://localhost:${config.port} to create your admin account.`);
   logger.info(`Data folder: ${config.dataDir}`);
   await start();
 });

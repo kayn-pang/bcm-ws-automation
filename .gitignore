@@ -1,6 +1,36 @@
-node_modules/
-# WhatsApp login, schedules and history. Never commit: it contains your session keys.
+# ------------------------------------------------------------------
+# NEVER upload these to GitHub or anywhere online.
+# ------------------------------------------------------------------
+
+# Private app data:
+#   whatsapp-auth/  your WhatsApp login (anyone with it can use your WhatsApp)
+#   db.json         accounts (password hashes), schedules, message history
+#   secret.key      signs login sessions
+#   uploads/        files you attached to messages
 data/
 data-demo/
+whatsapp-auth/
+auth_info*/
+secret.key
+db.json
+db.json.*
+uploads/
+
+# Passwords and settings for your machine or server
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Installed packages (re-created by "npm install")
+node_modules/
+
+# Logs, editor and system clutter
 *.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

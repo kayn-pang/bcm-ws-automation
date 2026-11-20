@@ -14,13 +14,42 @@
   <div id="login" class="login" hidden>
     <form class="login-card card" id="login-form">
       <div class="brand brand-lg"><span class="brand-mark" aria-hidden="true"></span><span>Community Scheduler</span></div>
-      <p class="muted">Enter the admin password to manage your WhatsApp schedules.</p>
+      <p class="muted">Log in to manage your WhatsApp schedules.</p>
+      <label class="field">
+        <span>Username</span>
+        <input type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      </label>
       <label class="field">
         <span>Password</span>
-        <input type="password" name="password" autocomplete="current-password" required autofocus>
+        <input type="password" name="password" autocomplete="current-password" required>
       </label>
       <p class="form-error" id="login-error" hidden></p>
       <button class="btn btn-primary btn-block" type="submit">Log in</button>
+      <p class="hint">Forgot your password? Set <code>ADMIN_PASSWORD</code> in the app's settings (<code>.env</code> or your host's variables) and restart. That account then uses this password.</p>
+    </form>
+  </div>
+
+  <div id="setup" class="login" hidden>
+    <form class="login-card card" id="setup-form">
+      <div class="brand brand-lg"><span class="brand-mark" aria-hidden="true"></span><span>Community Scheduler</span></div>
+      <div><h2>Create your admin account</h2>
+        <p class="muted" style="margin-top:4px">You'll use it to log in to this dashboard. You can add more people later in Settings.</p></div>
+      <label class="field">
+        <span>Username</span>
+        <input type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="32" required value="admin">
+        <span class="hint">Letters, numbers, dots, dashes or underscores.</span>
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" name="password" autocomplete="new-password" minlength="8" required>
+        <span class="hint">At least 8 characters.</span>
+      </label>
+      <label class="field">
+        <span>Repeat password</span>
+        <input type="password" name="password2" autocomplete="new-password" minlength="8" required>
+      </label>
+      <p class="form-error" id="setup-error" hidden></p>
+      <button class="btn btn-primary btn-block" type="submit">Create account</button>
     </form>
   </div>
 
@@ -30,7 +59,7 @@
       <nav class="nav" id="nav"></nav>
       <div class="sidebar-foot">
         <a class="conn-pill" id="conn-pill" href="#/connect"></a>
-        <button class="btn btn-ghost btn-sm" id="logout-btn" hidden>Log out</button>
+        <div class="whoami"><span id="whoami"></span><button class="btn btn-ghost btn-sm" id="logout-btn">Log out</button></div>
       </div>
     </aside>
 

@@ -1,7 +1,18 @@
+# Keep private data and local files out of the Docker image.
 node_modules
 data
 data-demo
+whatsapp-auth
+auth_info*
+secret.key
+db.json*
+uploads
 .env
+.env.*
+!.env.example
+*.pem
+*.key
 *.log
 test
+docs
 .git
