@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Community Scheduler</title>
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23128c5e'/%3E%3Cpath d='M9 11.5h14M9 16h10M9 20.5h7' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3Ccircle cx='23' cy='21' r='3.2' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="boot" class="boot"><div class="spinner"></div></div>
+
+  <div id="login" class="login" hidden>
+    <form class="login-card card" id="login-form">
+      <div class="brand brand-lg"><span class="brand-mark" aria-hidden="true"></span><span>Community Scheduler</span></div>
+      <p class="muted">Enter the admin password to manage your WhatsApp schedules.</p>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" name="password" autocomplete="current-password" required autofocus>
+      </label>
+      <p class="form-error" id="login-error" hidden></p>
+      <button class="btn btn-primary btn-block" type="submit">Log in</button>
+    </form>
+  </div>
+
+  <div id="app" class="shell" hidden>
+    <aside class="sidebar">
+      <a class="brand" href="#/schedules"><span class="brand-mark" aria-hidden="true"></span><span>Community<br>Scheduler</span></a>
+      <nav class="nav" id="nav"></nav>
+      <div class="sidebar-foot">
+        <a class="conn-pill" id="conn-pill" href="#/connect"></a>
+        <button class="btn btn-ghost btn-sm" id="logout-btn" hidden>Log out</button>
+      </div>
+    </aside>
+
+    <header class="topbar">
+      <a class="brand" href="#/schedules"><span class="brand-mark" aria-hidden="true"></span><span>Community Scheduler</span></a>
+      <a class="conn-pill" id="conn-pill-m" href="#/connect"></a>
+    </header>
+
+    <div id="demo-banner" class="demo-banner" hidden>
+      <strong>Demo mode.</strong> Nothing is sent to real WhatsApp. Run with <code>npm start</code> to use your number.
+    </div>
+
+    <main class="main" id="view" tabindex="-1"></main>
+
+    <nav class="tabbar" id="tabbar"></nav>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

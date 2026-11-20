@@ -1,0 +1,15 @@
+services:
+  community-scheduler:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      DATA_DIR: /data
+    ports:
+      - "3000:3000"
+    volumes:
+      - scheduler-data:/data
+
+volumes:
+  scheduler-data:

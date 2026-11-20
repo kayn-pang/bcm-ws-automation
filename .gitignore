@@ -1,0 +1,6 @@
+node_modules/
+# WhatsApp login, schedules and history. Never commit: it contains your session keys.
+data/
+data-demo/
+.env
+*.log
