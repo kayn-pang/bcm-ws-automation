@@ -347,7 +347,7 @@ export class BaileysDriver extends EventEmitter {
 
     let content;
     if (!media) {
-      content = { text };
+      content = process.env.DISABLE_LINK_PREVIEWS === '1' ? { text, linkPreview: null } : { text };
     } else {
       const file = { url: media.path };
       const caption = text || undefined;
