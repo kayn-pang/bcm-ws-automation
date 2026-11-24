@@ -1,0 +1,65 @@
+name: Test and deploy to Lightsail
+
+on:
+  pull_request:
+  push:
+    branches: [production]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm test
+
+  deploy:
+    if: ${{ github.ref == 'refs/heads/production' && github.event_name != 'pull_request' }}
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: lightsail-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-east-1
+      AWS_PAGER: ""
+      LIGHTSAIL_INSTANCE: ${{ vars.LIGHTSAIL_INSTANCE }}
+      LIGHTSAIL_STATIC_IP: ${{ vars.LIGHTSAIL_STATIC_IP }}
+      LIGHTSAIL_DEPLOY_ROLE_ARN: ${{ vars.LIGHTSAIL_DEPLOY_ROLE_ARN }}
+    steps:
+      - name: Check production configuration
+        env:
+          BRANCH_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          if [[ "$BRANCH_PROTECTED" != true ]]; then
+            echo "::error::Protect the production branch before enabling deployments."
+            exit 1
+          fi
+          : "${LIGHTSAIL_DEPLOY_ROLE_ARN:?Set Repository variable LIGHTSAIL_DEPLOY_ROLE_ARN}"
+          : "${LIGHTSAIL_INSTANCE:?Set Repository variable LIGHTSAIL_INSTANCE}"
+          : "${LIGHTSAIL_STATIC_IP:?Set Repository variable LIGHTSAIL_STATIC_IP}"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.LIGHTSAIL_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-lightsail-${{ github.run_id }}
+          role-duration-seconds: 2700
+      - name: Update application
+        run: bash deploy/lightsail/upload.sh

@@ -3,14 +3,18 @@ FROM node:22-slim
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
-    DATA_DIR=/data
+    DATA_DIR=/data \
+    DISABLE_LINK_PREVIEWS=1
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# The production image does not fetch previews for links in messages.
+RUN npm ci --omit=dev \
+    && rm -rf /app/node_modules/link-preview-js \
+    && npm cache clean --force
 
-COPY src ./src
-COPY public ./public
+COPY --chown=node:node src ./src
+COPY --chown=node:node public ./public
 
 # The data folder holds the WhatsApp login and your schedules. Mount a persistent
 # volume at /data (docker-compose.yml does this; on Railway add a volume at /data).
